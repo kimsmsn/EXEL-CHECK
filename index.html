@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>엑셀 DATA TOOL</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      font-family: 'Roboto', sans-serif;
+      padding: 40px;
+      background-color: #f5f7fa;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      max-width: 700px;
+      margin: auto;
+    }
+    h2 {
+      margin-bottom: 20px;
+      color: #333;
+      font-size: 24px;
+    }
+    label {
+      font-weight: bold;
+      margin-right: 10px;
+    }
+    input[type="text"] {
+      padding: 5px 8px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      margin-bottom: 15px;
+      margin-right: 15px;
+    }
+    .drop-zone {
+      border: 2px dashed #4a90e2;
+      padding: 30px;
+      text-align: center;
+      color: #4a90e2;
+      margin-bottom: 15px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .drop-zone.dragover {
+      background-color: #eaf3fc;
+    }
+    button {
+      padding: 10px 20px;
+      border: none;
+      background-color: #4a90e2;
+      color: white;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-top: 10px;
+      margin-right: 5px;
+    }
+    button:hover {
+      background-color: #357ABD;
+    }
+    #progressContainer {
+      margin-top: 15px;
+      height: 16px;
+      background: #e0e0e0;
+      border-radius: 8px;
+      overflow: hidden;
+      display: none;
+    }
+    #progressBar {
+      height: 100%;
+      width: 0%;
+      background: #4a90e2;
+      transition: width 0.3s;
+    }
+    .summary {
+      margin-top: 20px;
+      padding: 10px 15px;
+      background-color: #f9f9f9;
+      border-left: 4px solid #4a90e2;
+      color: #333;
+      border-radius: 4px;
+    }
+    .error-box {
+      background: #ffecec;
+      color: #c00;
+      border-left: 4px solid #c00;
+      padding: 10px 15px;
+      margin-top: 10px;
+      border-radius: 4px;
+    }
+    .success {
+      color: green;
+      font-weight: bold;
+      margin-top: 15px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>엑셀 DATA TOOL</h2>
+
+    <div style="margin-bottom: 20px;">
+      <label for="campaignType">캠페인 타입:</label>
+      <input type="text" id="campaignType" placeholder="예: NPN0" />
+      <label for="campaignId">아이디:</label>
+      <input type="text" id="campaignId" placeholder="예: JAMONGLAB" />
+    </div>
+
+    <div id="dropZone" class="drop-zone">
+      📂 엑셀 파일을 여기에 드래그 앤 드롭 하거나 클릭하여 선택하세요.
+      <input type="file" id="fileInput" style="display: none;" />
+    </div>
+
+    <button id="resetBtn">리셋</button>
+    <button id="recheckBtn" style="display:none;">다시 검사</button>
+    <button id="downloadBtn" style="display:none;">오류 결과 다운로드</button>
+    <div id="progressContainer"><div id="progressBar"></div></div>
+    <div id="result"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script>
+    let allErrors = [];
+    let fileB5Value = '';
+    let cachedData = [];
+    const fileInput = document.getElementById('fileInput');
+    const dropZone = document.getElementById('dropZone');
+    const resetBtn = document.getElementById('resetBtn');
+    const recheckBtn = document.getElementById('recheckBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const resultDiv = document.getElementById('result');
+    const progressBar = document.getElementById('progressBar');
+    const progressContainer = document.getElementById('progressContainer');
+    const campaignTypeInput = document.getElementById('campaignType');
+    const campaignIdInput = document.getElementById('campaignId');
+
+    function resetUI() {
+      fileInput.value = '';
+      resultDiv.innerHTML = '';
+      progressBar.style.width = '0%';
+      progressContainer.style.display = 'none';
+      downloadBtn.style.display = 'none';
+      recheckBtn.style.display = 'none';
+      fileB5Value = '';
+      cachedData = [];
+      campaignTypeInput.value = '';
+      campaignIdInput.value = '';
+    }
+
+    resetBtn.onclick = resetUI;
+    recheckBtn.onclick = () => {
+      if (cachedData.length > 0) {
+        runValidation(cachedData);
+      }
+    };
+
+    dropZone.onclick = () => fileInput.click();
+    dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('dragover'); };
+    dropZone.ondragleave = () => dropZone.classList.remove('dragover');
+    dropZone.ondrop = e => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      handleFile(e.dataTransfer.files[0]);
+    };
+    fileInput.onchange = () => handleFile(fileInput.files[0]);
+
+    async function handleFile(file) {
+      if (!file) return;
+
+      const campaignType = campaignTypeInput.value.trim();
+      const campaignId = campaignIdInput.value.trim();
+      if (!campaignType || !campaignId) {
+        alert('캠페인 타입과 아이디를 모두 입력해주세요.');
+        return;
+      }
+
+      const arrayBuffer = await file.arrayBuffer();
+      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+      fileB5Value = (data[4] && data[4][1]) ? String(data[4][1]).trim() : '';
+      cachedData = data;
+      resultDiv.innerHTML = `🔍 검사 시작: <b>${file.name}</b>`;
+      runValidation(data);
+    }
+
+    async function runValidation(data) {
+      const campaignType = campaignTypeInput.value.trim();
+      const campaignId = campaignIdInput.value.trim();
+
+      allErrors = [];
+      const total = data.length;
+      progressBar.style.width = '0%';
+      progressContainer.style.display = 'block';
+
+      for (let i = 4; i < total; i++) {
+        const row = data[i];
+        const rowId = (row[1] || '').toString().trim();
+        const rowType = (row[2] || '').toString().trim();
+
+        if (!rowId && !rowType) continue;
+
+        if (rowId !== campaignId) {
+          allErrors.push(`${i + 1}행 아이디 오류: '${rowId}' → '${campaignId}'와 다름`);
+        }
+        if (rowType !== campaignType) {
+          allErrors.push(`${i + 1}행 캠페인타입 오류: '${rowType}' → '${campaignType}'와 다름`);
+        }
+
+        if (i % 10 === 0) {
+          const percent = Math.round((i / total) * 100);
+          progressBar.style.width = `${percent}%`;
+          resultDiv.innerHTML = `📊 진행 중... (${i}/${total}행)`;
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      }
+
+      progressBar.style.width = '100%';
+      recheckBtn.style.display = 'inline-block';
+      displayResult(allErrors);
+    }
+
+    function displayResult(errors) {
+      if (errors.length === 0) {
+        resultDiv.innerHTML = `<div class="success">✅ 오류 없음</div>`;
+        return;
+      }
+
+      const summaryMap = {};
+      errors.forEach(err => {
+        const key = err.split(':')[1]?.trim().split(' ')[0] || '기타';
+        summaryMap[key] = (summaryMap[key] || 0) + 1;
+      });
+
+      const summary = Object.entries(summaryMap)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([key, count]) => `• ${key} 관련 ${count}건`)
+        .join('<br>');
+
+      const summaryHTML = `
+        <div class="summary">
+          🚨 총 오류 수: ${errors.length}건<br>
+          📌 주요 오류:<br>${summary}
+        </div>
+      `;
+
+      const errorHTML = errors.map(e => `<div class="error-box">❌ ${e}</div>`).join('');
+      resultDiv.innerHTML = summaryHTML + errorHTML;
+      downloadBtn.style.display = 'inline-block';
+    }
+
+    downloadBtn.onclick = () => {
+      const worksheet = XLSX.utils.aoa_to_sheet([['오류 메시지'], ...allErrors.map(e => [e])]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, worksheet, '오류결과');
+
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = ('0' + (today.getMonth() + 1)).slice(-2);
+      const d = ('0' + today.getDate()).slice(-2);
+      const filename = `${y}-${m}-${d}_오류결과_${fileB5Value || '파일명미정'}.xlsx`;
+
+      XLSX.writeFile(wb, filename);
+    };
+  </script>
+</body>
+</html>
